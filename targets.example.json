@@ -1,0 +1,4 @@
+{
+  "rig":    {"api": "http://192.0.2.10:8080", "machine": "Rig"},
+  "pair-a": {"api": "http://192.0.2.20:8888", "machine": "Pair A"}
+}
