@@ -41,6 +41,9 @@ from datetime import datetime, timezone
 # and the suite measures its own ceiling.
 #
 # A case may still set its own max_tokens; this is only the default.
+# ⛔ CLOUD TARGETS ONLY (2026-10-21). The lab's own boxes get no max_tokens at all, as
+# OpenCode asks them: on the Spark pairs GPQA's hardest chemistry came back blank at
+# 32000 and scored wrong, so the suite was measuring its ceiling again. See ask_target.
 MAX_TOKENS = 32000
 
 # ⛔ WHEN IS HITTING THE CEILING THE MODEL'S FAULT, NOT OURS?
@@ -110,6 +113,10 @@ TARGETS = {
 }
 SKIP_IDS = {"brain"}          # selectors are aliases, not models
 TIMEOUT = 600
+# A lab box answers uncapped, so a hard question can think for far longer than 600 s
+# (GLM on Sparks A+B timed out on 13 GPQA questions, 2026-10-18). Two hours is only the
+# backstop for a model that never stops; a timeout still blocks the post.
+LAB_TIMEOUT = 7200
 
 
 def container_facts(target, serving_id):
@@ -248,8 +255,10 @@ def resolve_model_id(ids, serving_id):
             or ids.get(catalog_name(serving_id)))
 
 
-def ask(api, model, messages, tools=None, max_tokens=MAX_TOKENS, auth=None):
-    payload = {"model": model, "messages": messages, "max_tokens": max_tokens, "stream": False}
+def ask(api, model, messages, tools=None, max_tokens=MAX_TOKENS, auth=None, timeout=TIMEOUT):
+    payload = {"model": model, "messages": messages, "stream": False}
+    if max_tokens is not None:              # None = the server's own limit (the lab's boxes)
+        payload["max_tokens"] = max_tokens
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
@@ -259,7 +268,7 @@ def ask(api, model, messages, tools=None, max_tokens=MAX_TOKENS, auth=None):
         headers["Authorization"] = f"Bearer {auth}"
     req = urllib.request.Request(f"{api}/v1/chat/completions",
                                  data=json.dumps(payload).encode(), headers=headers)
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         choice = json.loads(r.read().decode())["choices"][0]
     # ⛔ KEEP finish_reason. Without it an empty answer is ambiguous in exactly
     # the way that matters: "length" means WE starved the model and the score is
@@ -480,4 +489,6 @@ def ask_target(target, model, messages, tools=None, max_tokens=MAX_TOKENS):
     key = os.environ.get(target["key_env"]) if target.get("key_env") else None
     if target.get("key_env") and not key:
         raise RuntimeError(f"{target['key_env']} is not set - export it before running this target")
+    if kind == "openai_local":              # the lab's boxes: uncapped, like OpenCode
+        return ask(target["api"], model, messages, tools, None, timeout=LAB_TIMEOUT)
     return ask(target["api"], model, messages, tools, max_tokens, auth=key)
