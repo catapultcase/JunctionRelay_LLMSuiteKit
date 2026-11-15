@@ -242,6 +242,11 @@ def runtime_facts(api, serving_id):
 # must start with q/iq, which is what keeps it off names like 'lfm2.5-8b-a1b'
 # and 'qwen3-embedding-0.6b'.
 def catalog_name(serving_id):
+    # A box that serves under an alias ('box-cd'): the model is whatever it is running, read from its launch.
+    bench = _bench()
+    running = bench.running_name(serving_id) if bench and hasattr(bench, "running_name") else None
+    if running:
+        return running
     s = serving_id.removesuffix("-mtp")
     s = re.sub(r"-\d+k(?=-|$)", "", s)
     return re.sub(r"-(?:iq|q)\d[a-z0-9_]*$", "", s, flags=re.I)
