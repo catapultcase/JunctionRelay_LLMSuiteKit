@@ -23,6 +23,7 @@ is the fallback, so there is one place the credentials live.
 import json
 import os
 import re
+import ssl
 import urllib.request
 from dataclasses import dataclass
 
@@ -145,11 +146,25 @@ def connect(client="jrsuite"):
     return JRMcp(url, auth, client)
 
 
+# JR serves HTTPS with the house's own certificate (since 2026-11-22). Every house box carries the house bundle
+# (~/.config/house-certs.pem, written by true-up; NODE_EXTRA_CA_CERTS for Node), which Python does not read by itself:
+# JR's calls verify against it, beside the system's roots. SSL_CERT_FILE, when set, names another bundle.
+HOUSE_CERTS = os.environ.get("SSL_CERT_FILE") or os.path.expanduser("~/.config/house-certs.pem")
+
+
+def jr_ssl_context():
+    ctx = ssl.create_default_context()
+    if os.path.isfile(HOUSE_CERTS):
+        ctx.load_verify_locations(HOUSE_CERTS)
+    return ctx
+
+
 class JRMcp:
     """Minimal MCP streamable-HTTP client."""
 
     def __init__(self, url, auth, client="jrsuite"):
         self.url, self.auth, self.sid, self._id = url, auth, None, 0
+        self.ctx = jr_ssl_context()
         r = self._post({"method": "initialize", "params": {
             "protocolVersion": "2025-03-26", "capabilities": {},
             "clientInfo": {"name": client, "version": "1.0"}}})
@@ -172,7 +187,7 @@ class JRMcp:
         self._id += 1
         body = json.dumps({"jsonrpc": "2.0", "id": self._id, **payload}).encode()
         req = urllib.request.Request(self.url, data=body, headers=self._headers())
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urllib.request.urlopen(req, timeout=60, context=self.ctx) as r:
             self.sid = r.headers.get("Mcp-Session-Id") or self.sid
             text, ctype = r.read().decode(), r.headers.get("Content-Type", "")
         if "text/event-stream" in ctype:
@@ -187,7 +202,7 @@ class JRMcp:
     def _notify(self, method):
         body = json.dumps({"jsonrpc": "2.0", "method": method}).encode()
         urllib.request.urlopen(
-            urllib.request.Request(self.url, data=body, headers=self._headers()), timeout=30).read()
+            urllib.request.Request(self.url, data=body, headers=self._headers()), timeout=30, context=self.ctx).read()
 
     def call(self, tool, args):
         r = self._post({"method": "tools/call", "params": {"name": tool, "arguments": args}})
